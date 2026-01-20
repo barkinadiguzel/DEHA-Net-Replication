@@ -1,23 +1,24 @@
 import torch
 import numpy as np
 from model.deha_net import DEHANet
+from consensus.consensus_module import ConsensusModule
 from roi.adaptive_roi import AdaptiveROI
 from roi.roi_utils import crop_roi
 
+
 class InferencePipeline:
-    def __init__(self, model_path):
+    def __init__(self, model_path, device="cuda"):
         self.model = DEHANet()
-        self.model.load_state_dict(torch.load(model_path))
-        self.model.eval()
+        self.model.load_state_dict(torch.load(model_path, map_location=device))
+
+        self.consensus = ConsensusModule(self.model, device=device)
         self.roi = AdaptiveROI()
 
-    def run(self, img):
-        x = torch.tensor(img).unsqueeze(0).unsqueeze(0)
+    def run(self, volume)
+        pred_volume = self.consensus.run(volume)
 
-        with torch.no_grad():
-            pred = self.model(x, x).squeeze().numpy()
+        bbox = self.roi.generate_roi(pred_volume)
 
-        bbox = self.roi.generate_roi(pred)
-        roi_img = crop_roi(img, bbox) if bbox else None
+        roi_volume = crop_roi(volume, bbox) if bbox else None
 
-        return pred, roi_img
+        return pred_volume, roi_volume
