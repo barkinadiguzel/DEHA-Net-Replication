@@ -1,51 +1,54 @@
 import torch
 import torch.nn as nn
+from encoders import Encoder
+from decoder import Decoder
+from attention import HardAttentionGate
+import torch.nn.functional as F
 
-from .blocks import EncoderBlock, DecoderBlock, HardAttentionGate
 
 class DEHANet(nn.Module):
-    def __init__(self, in_channels=1, num_classes=1):
+    def __init__(self, in_channels=1):
         super().__init__()
 
-        # Global Encoder
-        self.enc1_g = EncoderBlock(in_channels, 64)
-        self.enc2_g = EncoderBlock(64, 128)
-        self.enc3_g = EncoderBlock(128, 256)
+        # Dual Encoder
+        self.global_encoder = Encoder(in_channels)
+        self.local_encoder  = Encoder(in_channels)
 
-        # Local Encoder (ROI branch)
-        self.enc1_l = EncoderBlock(in_channels, 64)
-        self.enc2_l = EncoderBlock(64, 128)
-        self.enc3_l = EncoderBlock(128, 256)
+        # Bottleneck
+        self.bottleneck = nn.Conv2d(256, 256, kernel_size=3, padding=1)
 
-        # Hard Attention
-        self.att = HardAttentionGate(256)
+        # Attention Gates 
+        self.att4 = HardAttentionGate(256, 256)
+        self.att3 = HardAttentionGate(128, 128)
+        self.att2 = HardAttentionGate(64, 64)
+        self.att1 = HardAttentionGate(32, 32)
 
-        # Decoder
-        self.dec3 = DecoderBlock(256, 256, 128)
-        self.dec2 = DecoderBlock(128, 128, 64)
-        self.dec1 = DecoderBlock(64, 64, 32)
-
-        self.out_conv = nn.Conv2d(32, num_classes, 1)
+        # Decoder 
+        self.decoder = Decoder()
 
     def forward(self, img, roi):
-        # Global path
-        g1, p1g = self.enc1_g(img)
-        g2, p2g = self.enc2_g(p1g)
-        g3, p3g = self.enc3_g(p2g)
 
-        # Local path (ROI masked input)
-        roi_img = img * roi
-        l1, p1l = self.enc1_l(roi_img)
-        l2, p2l = self.enc2_l(p1l)
-        l3, p3l = self.enc3_l(p2l)
+        # Global encoder
+        g_x, g_skips = self.global_encoder(img)
 
-        # Hard Attention Fusion
-        fused = self.att(p3g, p3l)
+        # Local encoder
+        l_x, l_skips = self.local_encoder(roi)
+
+        # Bottleneck
+        x = self.bottleneck(g_x + l_x)
+
+        # Attention applied to skip connections
+        s1_g, s2_g, s3_g, s4_g = g_skips
+        s1_l, s2_l, s3_l, s4_l = l_skips
+
+        a4 = self.att4(s4_g, s4_l)
+        a3 = self.att3(s3_g, s3_l)
+        a2 = self.att2(s2_g, s2_l)
+        a1 = self.att1(s1_g, s1_l)
 
         # Decoder
-        d3 = self.dec3(fused, g3)
-        d2 = self.dec2(d3, g2)
-        d1 = self.dec1(d2, g1)
+        out = self.decoder(x,
+                           skips_img=[s1_g, s2_g, s3_g, s4_g],
+                           skips_roi=[a1, a2, a3, a4])
 
-        out = self.out_conv(d1)
         return out
